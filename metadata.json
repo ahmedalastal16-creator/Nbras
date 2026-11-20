@@ -1,0 +1,6 @@
+{
+  "name": "نبراس",
+  "description": "رفيق دراسة ذكي فاخر مدعوم بالذكاء الاصطناعي للملخصات والبطاقات التعليمية والاختبارات والملاحظات المصورة",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

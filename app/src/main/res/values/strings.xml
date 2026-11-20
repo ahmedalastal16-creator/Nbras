@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">نبراس</string>
+    <string name="app_tagline">رفيق رزم غزة التعليمية</string>
+    <string name="nav_home">الرئيسية</string>
+    <string name="nav_tutor">المعلم</string>
+    <string name="nav_lab">المختبر</string>
+    <string name="nav_library">المكتبة</string>
+    <string name="gaza_ai_active_badge">متصل بالذكاء الاصطناعي المخصص لرزم غزة التعليمية (moe.edu.ps/gaza/subjects)</string>
+    <string name="gaza_portal_cta">فتح بوابة الرزم الرسمية</string>
+    <string name="back_content_desc">رجوع</string>
+    <string name="attach_image_desc">إرفاق صورة من الرزمة أو الدفتر</string>
+    <string name="send_message_desc">إرسال</string>
+    <string name="hero_banner_desc">خلفية استوديو نبراس للدراسة</string>
+    <string name="ai_crest_desc">شعار المعلم الذكي</string>
+</resources>
