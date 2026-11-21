@@ -60,9 +60,13 @@ data class StudyNoteEntity(
     val createdAt: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "chat_messages")
+@Entity(
+    tableName = "chat_messages",
+    indices = [Index("packageId")]
+)
 data class ChatMessageEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val packageId: String = "pkg_tawjihi_scientific_0",
     val isUser: Boolean,
     val text: String,
     val imageUri: String? = null,
@@ -85,4 +89,23 @@ data class QuizAttemptEntity(
     val score: Int,
     val totalQuestions: Int,
     val completedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "study_schedule",
+    indices = [Index("dayIndex")]
+)
+data class StudyScheduleEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val stageId: String,
+    val dayIndex: Int,
+    val dayLabel: String,
+    val subjectTitle: String,
+    val topic: String,
+    val timeSlot: String,
+    val durationMinutes: Int,
+    val focusType: String,
+    val accentHex: Long,
+    val isCompleted: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis()
 )

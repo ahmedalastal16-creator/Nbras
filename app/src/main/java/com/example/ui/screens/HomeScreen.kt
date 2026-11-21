@@ -2,6 +2,9 @@ package com.example.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -25,11 +28,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.MenuBook
@@ -74,6 +81,7 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.curriculum.GazaCurriculumCatalog
 import com.example.data.curriculum.GazaStage
+import com.example.data.local.StudyScheduleEntity
 import com.example.ui.components.CreateDeckDialog
 import com.example.ui.components.DeckLuxuryCard
 import com.example.ui.components.GazaPackageSelectorRow
@@ -82,16 +90,22 @@ import com.example.ui.components.StudyInsightsCanvasCard
 import com.example.ui.state.DashboardStats
 import com.example.ui.state.DeckWithStats
 import com.example.ui.state.FocusTimerState
+import com.example.ui.viewmodel.AuthAccountState
 import java.util.Locale
 
 @Composable
 fun HomeScreen(
     stats: DashboardStats,
     decks: List<DeckWithStats>,
+    scheduleItems: List<StudyScheduleEntity>,
     focusTimer: FocusTimerState,
     selectedStage: GazaStage,
     selectedSubject: String,
+    cloudSummariesCount: Int,
     isDarkTheme: Boolean,
+    authState: AuthAccountState,
+    onOpenSignIn: () -> Unit,
+    onSignOut: () -> Unit,
     onToggleTheme: () -> Unit,
     onSelectStage: (GazaStage) -> Unit,
     onSelectSubject: (String) -> Unit,
@@ -99,6 +113,8 @@ fun HomeScreen(
     onOpenDeck: (Long) -> Unit,
     onOpenTutor: () -> Unit,
     onOpenLab: () -> Unit,
+    onOpenSchedule: () -> Unit,
+    onOpenSummaries: () -> Unit,
     onSelectFocusPreset: (Int) -> Unit,
     onSelectFocusSubject: (String) -> Unit,
     onToggleFocusTimer: () -> Unit,
@@ -136,6 +152,9 @@ fun HomeScreen(
                     selectedStage = selectedStage,
                     selectedSubject = selectedSubject,
                     isDarkTheme = isDarkTheme,
+                    authState = authState,
+                    onOpenSignIn = onOpenSignIn,
+                    onSignOut = onSignOut,
                     onToggleTheme = onToggleTheme,
                     onOpenTutor = onOpenTutor,
                     onOpenLab = onOpenLab
@@ -152,6 +171,22 @@ fun HomeScreen(
                         onCreateGazaDeck(selectedStage.title, selectedSubject)
                     },
                     onAskTutorOnPackage = onOpenTutor
+                )
+            }
+
+            item {
+                ScheduleSuggestionHomeCard(
+                    scheduleItems = scheduleItems,
+                    selectedSubject = selectedSubject,
+                    onOpenSchedule = onOpenSchedule
+                )
+            }
+
+            item {
+                CloudSummariesHomeCard(
+                    cloudSummariesCount = cloudSummariesCount,
+                    isSignedIn = authState.isSignedIn,
+                    onOpenSummaries = onOpenSummaries
                 )
             }
 
@@ -264,6 +299,9 @@ private fun LuxuryHeroHeader(
     selectedStage: GazaStage,
     selectedSubject: String,
     isDarkTheme: Boolean,
+    authState: AuthAccountState,
+    onOpenSignIn: () -> Unit,
+    onSignOut: () -> Unit,
     onToggleTheme: () -> Unit,
     onOpenTutor: () -> Unit,
     onOpenLab: () -> Unit
@@ -313,29 +351,80 @@ private fun LuxuryHeroHeader(
                         color = Color(0xFFE2C068).copy(alpha = 0.18f)
                     ) {
                         Text(
-                            text = "نبراس • رزم غزة التعليمية (Gemini AI)",
+                            text = "نبراس • رزم غزة التعليمية",
                             style = MaterialTheme.typography.labelSmall,
                             color = Color(0xFFE2C068),
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
                         )
                     }
 
-                    IconButton(
-                        onClick = onToggleTheme,
-                        colors = IconButtonDefaults.iconButtonColors(
-                            containerColor = Color.White.copy(alpha = 0.12f),
-                            contentColor = Color(0xFFE2C068)
-                        ),
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .testTag("theme_toggle_button")
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = if (isDarkTheme) Icons.Filled.LightMode else Icons.Filled.DarkMode,
-                            contentDescription = "تبديل المظهر الفاخر",
-                            modifier = Modifier.size(20.dp)
-                        )
+                        if (authState.isSignedIn) {
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = Color.White.copy(alpha = 0.12f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = authState.displayName?.split(" ")?.firstOrNull() ?: "حسابي",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFFF5F1E8)
+                                    )
+                                    IconButton(
+                                        onClick = onSignOut,
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .testTag("home_signout_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.Logout,
+                                            contentDescription = "تسجيل الخروج",
+                                            tint = Color(0xFFE2C068),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            TextButton(
+                                onClick = onOpenSignIn,
+                                colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFE2C068)),
+                                modifier = Modifier.testTag("home_signin_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.AccountCircle,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("دخول", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+
+                        IconButton(
+                            onClick = onToggleTheme,
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = Color.White.copy(alpha = 0.12f),
+                                contentColor = Color(0xFFE2C068)
+                            ),
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .testTag("theme_toggle_button")
+                        ) {
+                            Icon(
+                                imageVector = if (isDarkTheme) Icons.Filled.LightMode else Icons.Filled.DarkMode,
+                                contentDescription = "تبديل المظهر الفاخر",
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
                 }
 
@@ -681,3 +770,169 @@ private fun FocusStudioCard(
         }
     }
 }
+
+@Composable
+private fun ScheduleSuggestionHomeCard(
+    scheduleItems: List<StudyScheduleEntity>,
+    selectedSubject: String,
+    onOpenSchedule: () -> Unit
+) {
+    val completedCount = remember(scheduleItems) { scheduleItems.count { it.isCompleted } }
+    val nextSession = remember(scheduleItems) {
+        scheduleItems.firstOrNull { !it.isCompleted } ?: scheduleItems.firstOrNull()
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.45f))
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.CalendarMonth,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.secondary
+                    )
+                    Column {
+                        Text(
+                            text = "جدول الدراسة والاقتراحات الذكية",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (scheduleItems.isEmpty()) {
+                                "رتّب حصصك الأسبوعية حسب رزم $selectedSubject"
+                            } else {
+                                "أُنجز $completedCount من ${scheduleItems.size} حصص أسبوعية"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                OutlinedButton(
+                    onClick = onOpenSchedule,
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("home_open_schedule_button"),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary)
+                ) {
+                    Text("فتح الجدول")
+                }
+            }
+
+            if (nextSession != null) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "الحصة المقترحة التالية: ${nextSession.subjectTitle}",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "${nextSession.dayLabel} • ${nextSession.timeSlot} (${nextSession.durationMinutes} د) — ${nextSession.focusType}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CloudSummariesHomeCard(
+    cloudSummariesCount: Int,
+    isSignedIn: Boolean,
+    onOpenSummaries: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.horizontalGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                            MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f)
+                        )
+                    )
+                )
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.CloudDone,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Column {
+                    Text(
+                        text = "الملخصات الدراسية السحابية",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = if (isSignedIn) {
+                            "لديك $cloudSummariesCount ملخص متزامن عبر Firestore"
+                        } else {
+                            "احفظ ملخصاتك وزامنها سحابياً عبر حساب Google أو Apple"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+                onClick = onOpenSummaries,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("home_open_summaries_button")
+            ) {
+                Text("الملخصات")
+            }
+        }
+    }
+}
+

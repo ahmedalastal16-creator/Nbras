@@ -17,11 +17,15 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -29,6 +33,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -41,8 +46,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.audio.VoicePlaybackState
 import com.example.data.local.StudyNoteEntity
 import com.example.ui.components.CreateDeckDialog
 import com.example.ui.components.DeckLuxuryCard
@@ -53,7 +61,11 @@ import com.example.ui.state.DeckWithStats
 fun LibraryScreen(
     decks: List<DeckWithStats>,
     notes: List<StudyNoteEntity>,
+    cloudSummariesCount: Int,
+    voiceState: VoicePlaybackState,
+    onToggleSpeak: (itemId: String, text: String) -> Unit,
     onOpenDeck: (Long) -> Unit,
+    onOpenSummaries: () -> Unit,
     onCreateDeck: (title: String, subtitle: String, category: String, accentHex: Long) -> Unit,
     onDeleteNote: (Long) -> Unit,
     modifier: Modifier = Modifier
@@ -130,6 +142,64 @@ fun LibraryScreen(
             }
 
             item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.large,
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.48f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                Brush.horizontalGradient(
+                                    listOf(
+                                        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
+                                        MaterialTheme.colorScheme.surface
+                                    )
+                                )
+                            )
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.CloudDone,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.size(26.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "الملخصات الدراسية السحابية",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "$cloudSummariesCount ملخصات متزامنة عبر Firestore",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = onOpenSummaries,
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("library_open_summaries_button")
+                        ) {
+                            Text("فتح الواجهة")
+                        }
+                    }
+                }
+            }
+
+            item {
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
@@ -180,6 +250,8 @@ fun LibraryScreen(
                     }
                 } else {
                     items(filteredNotes, key = { it.id }) { note ->
+                        val noteSpeakId = "note_${note.id}"
+                        val isSpeakingNote = voiceState.isSpeaking && voiceState.speakingItemId == noteSpeakId
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = MaterialTheme.shapes.medium,
@@ -200,15 +272,35 @@ fun LibraryScreen(
                                     } else {
                                         Spacer(modifier = Modifier.width(1.dp))
                                     }
-                                    IconButton(
-                                        onClick = { onDeleteNote(note.id) },
-                                        modifier = Modifier.minimumInteractiveComponentSize()
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Delete,
-                                            contentDescription = "حذف الملخص",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        IconButton(
+                                            onClick = { onToggleSpeak(noteSpeakId, "${note.title}. ${note.summaryContent}") },
+                                            modifier = Modifier.minimumInteractiveComponentSize()
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isSpeakingNote) {
+                                                    Icons.Filled.Stop
+                                                } else {
+                                                    Icons.AutoMirrored.Filled.VolumeUp
+                                                },
+                                                contentDescription = if (isSpeakingNote) "إيقاف القراءة" else "استمع للملخص",
+                                                tint = if (isSpeakingNote) {
+                                                    MaterialTheme.colorScheme.error
+                                                } else {
+                                                    MaterialTheme.colorScheme.secondary
+                                                }
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { onDeleteNote(note.id) },
+                                            modifier = Modifier.minimumInteractiveComponentSize()
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Delete,
+                                                contentDescription = "حذف الملخص",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
                                     }
                                 }
                                 Text(

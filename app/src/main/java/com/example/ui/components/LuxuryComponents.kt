@@ -2,9 +2,20 @@ package com.example.ui.components
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -28,9 +39,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Style
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -69,9 +83,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.example.audio.VoicePlaybackState
 import com.example.data.curriculum.GazaCurriculumCatalog
 import com.example.data.curriculum.GazaStage
 import com.example.data.local.StudyDeckEntity
+import com.example.data.repository.AiSpeedMode
 import com.example.ui.state.DeckWithStats
 
 @Composable
@@ -95,7 +111,7 @@ fun GazaCurriculumLiveBanner(
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Icon(
-                imageVector = Icons.Filled.MenuBook,
+                imageVector = Icons.AutoMirrored.Filled.MenuBook,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(20.dp)
@@ -211,6 +227,304 @@ fun SampleOutputPill(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary
             )
+        }
+    }
+}
+
+@Composable
+fun AiSpeedModeRow(
+    speedMode: AiSpeedMode,
+    onSelectSpeedMode: (AiSpeedMode) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        FilterChip(
+            selected = speedMode == AiSpeedMode.FAST,
+            onClick = { onSelectSpeedMode(AiSpeedMode.FAST) },
+            leadingIcon = {
+                Icon(Icons.Filled.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
+            },
+            label = { Text("فوري مجاني") },
+            modifier = Modifier.testTag("speed_mode_fast")
+        )
+        FilterChip(
+            selected = speedMode == AiSpeedMode.DETAILED,
+            onClick = { onSelectSpeedMode(AiSpeedMode.DETAILED) },
+            leadingIcon = {
+                Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
+            },
+            label = { Text("شرح مفصّل") },
+            modifier = Modifier.testTag("speed_mode_detailed")
+        )
+    }
+}
+
+@Composable
+fun ModernAiThinkingCard(
+    subjectTitle: String,
+    elapsedSeconds: Int,
+    phases: List<String>,
+    cancelButtonTag: String,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "ai_aurora")
+    val shimmerShift by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1900, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "shimmer_shift"
+    )
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 0.92f,
+        targetValue = 1.08f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 950, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulse_scale"
+    )
+    val dotPhase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "dot_phase"
+    )
+
+    val safePhases = phases.ifEmpty {
+        listOf("نبراس يحلّل $subjectTitle...", "يرتّب الأفكار الأساسية...")
+    }
+    val activePhase = safePhases[(elapsedSeconds / 3) % safePhases.size]
+
+    val primary = MaterialTheme.colorScheme.primary
+    val secondary = MaterialTheme.colorScheme.secondary
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .animateContentSize(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            width = 1.2.dp,
+            brush = Brush.horizontalGradient(
+                colors = listOf(
+                    primary.copy(alpha = 0.25f + 0.45f * shimmerShift),
+                    secondary.copy(alpha = 0.7f - 0.35f * shimmerShift),
+                    primary.copy(alpha = 0.55f)
+                )
+            )
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.horizontalGradient(
+                        colors = listOf(
+                            primary.copy(alpha = 0.08f + 0.06f * shimmerShift),
+                            secondary.copy(alpha = 0.07f + 0.05f * (1f - shimmerShift)),
+                            MaterialTheme.colorScheme.surface
+                        )
+                    )
+                )
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .graphicsLayer {
+                                scaleX = pulseScale
+                                scaleY = pulseScale
+                            }
+                            .clip(CircleShape)
+                            .background(
+                                Brush.linearGradient(
+                                    colors = listOf(primary.copy(alpha = 0.28f), secondary.copy(alpha = 0.24f))
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.AutoAwesome,
+                            contentDescription = null,
+                            tint = primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "نبراس AI",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = primary
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                repeat(3) { idx ->
+                                    val dist = kotlin.math.abs(dotPhase - idx)
+                                    val dotAlpha = (1f - dist.coerceIn(0f, 1f) * 0.68f)
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .clip(CircleShape)
+                                            .background(secondary.copy(alpha = dotAlpha))
+                                    )
+                                }
+                            }
+                            if (elapsedSeconds > 0) {
+                                Surface(
+                                    shape = RoundedCornerShape(50),
+                                    color = primary.copy(alpha = 0.14f)
+                                ) {
+                                    Text(
+                                        text = "${elapsedSeconds}ث",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = primary,
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        AnimatedContent(
+                            targetState = activePhase,
+                            transitionSpec = {
+                                fadeIn(animationSpec = tween(260)) togetherWith fadeOut(animationSpec = tween(180))
+                            },
+                            label = "ai_phase_text"
+                        ) { phaseText ->
+                            Text(
+                                text = phaseText,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+
+                TextButton(
+                    onClick = onCancel,
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag(cancelButtonTag)
+                ) {
+                    Text(
+                        text = "إيقاف",
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.38f + 0.52f * shimmerShift)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(
+                            Brush.horizontalGradient(listOf(primary, secondary))
+                        )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun VoicePlayerBar(
+    voiceState: VoicePlaybackState,
+    onSetSpeed: (Float) -> Unit,
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .testTag("voice_player_bar"),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.55f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.size(20.dp)
+            )
+            Text(
+                text = if (voiceState.hasArabicVoice) "يُقرأ الشرح صوتياً" else "قراءة صوتية",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            listOf(0.85f to "بطيء", 1.0f to "عادي", 1.25f to "سريع").forEach { (rate, label) ->
+                val selected = kotlin.math.abs(voiceState.speechRate - rate) < 0.05f
+                FilterChip(
+                    selected = selected,
+                    onClick = { onSetSpeed(rate) },
+                    label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                    modifier = Modifier.testTag("voice_speed_${rate}")
+                )
+            }
+
+            IconButton(
+                onClick = onStop,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("voice_stop_bar_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Stop,
+                    contentDescription = "إيقاف القراءة الصوتية",
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
         }
     }
 }

@@ -1,0 +1,177 @@
+{
+  "entities": {
+    "ConversationSummary": {
+      "title": "ConversationSummary",
+      "description": "Metadata and latest preview for an isolated Gaza curriculum package AI conversation thread.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the conversation owner."
+        },
+        "stageId": {
+          "type": "string",
+          "description": "Deterministic Gaza curriculum stage identifier (ASCII slug)."
+        },
+        "stageTitle": {
+          "type": "string",
+          "description": "Arabic display title of the educational stage."
+        },
+        "subjectTitle": {
+          "type": "string",
+          "description": "Arabic display title of the subject package."
+        },
+        "lastMessagePreview": {
+          "type": "string",
+          "description": "Short preview of the most recent message in this package conversation."
+        },
+        "messageCount": {
+          "type": "integer",
+          "description": "Total number of saved messages in this package conversation."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() when conversation is created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp updated via FieldValue.serverTimestamp() on each message."
+        }
+      },
+      "required": [
+        "userId",
+        "stageId",
+        "stageTitle",
+        "subjectTitle",
+        "lastMessagePreview",
+        "messageCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "A single user prompt or Gemini AI tutor reply stored inside a package conversation.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the message owner."
+        },
+        "conversationId": {
+          "type": "string",
+          "description": "Parent package conversation identifier."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "model"],
+          "description": "Sender role: user or model."
+        },
+        "text": {
+          "type": "string",
+          "description": "Message body text in Arabic or study notes."
+        },
+        "imageUri": {
+          "type": "string",
+          "description": "Optional attached local image URI string."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "userId",
+        "conversationId",
+        "role",
+        "text",
+        "createdAt"
+      ]
+    },
+    "StudySummary": {
+      "title": "StudySummary",
+      "description": "Cloud-synced student study summary tied to a Gaza curriculum stage and subject.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the summary owner."
+        },
+        "stageId": {
+          "type": "string",
+          "description": "Gaza curriculum stage identifier (ASCII slug)."
+        },
+        "stageTitle": {
+          "type": "string",
+          "description": "Arabic display title of the educational stage."
+        },
+        "subjectTitle": {
+          "type": "string",
+          "description": "Arabic display title of the subject package."
+        },
+        "title": {
+          "type": "string",
+          "description": "Summary headline or lesson name."
+        },
+        "content": {
+          "type": "string",
+          "description": "Full structured summary body."
+        },
+        "keyTerms": {
+          "type": "string",
+          "description": "Important keywords, laws, or formulas separated by bullets."
+        },
+        "sourceType": {
+          "type": "string",
+          "enum": ["manual", "ai_lab", "tutor"],
+          "description": "Origin of the summary: manual user note, AI Lab, or Tutor explanation."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() when created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp updated via FieldValue.serverTimestamp() on edits."
+        }
+      },
+      "required": [
+        "userId",
+        "stageId",
+        "stageTitle",
+        "subjectTitle",
+        "title",
+        "content",
+        "keyTerms",
+        "sourceType",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/conversations/{conversationId}": {
+      "schema": {
+        "$ref": "#/entities/ConversationSummary"
+      },
+      "description": "Per-user, per-Gaza-package isolated conversation headers ordered by updatedAt."
+    },
+    "/users/{userId}/conversations/{conversationId}/messages/{messageId}": {
+      "schema": {
+        "$ref": "#/entities/ChatMessage"
+      },
+      "description": "Ordered message log belonging to a specific Gaza package conversation."
+    },
+    "/users/{userId}/summaries/{summaryId}": {
+      "schema": {
+        "$ref": "#/entities/StudySummary"
+      },
+      "description": "Per-user cloud-synced study summaries ordered by updatedAt."
+    }
+  }
+}

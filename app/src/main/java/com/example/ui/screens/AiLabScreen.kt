@@ -25,21 +25,25 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.animateContentSize
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Quiz
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Style
 import androidx.compose.material.icons.filled.Summarize
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -49,6 +53,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -66,13 +71,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.example.audio.VoicePlaybackState
 import com.example.data.curriculum.GazaStage
 import com.example.data.local.StudyDeckEntity
+import com.example.data.repository.AiSpeedMode
 import com.example.data.repository.AiSummaryResult
 import com.example.data.repository.GeneratedFlashcard
+import com.example.ui.components.AiSpeedModeRow
 import com.example.ui.components.ChooseDeckDialog
 import com.example.ui.components.GazaCurriculumLiveBanner
 import com.example.ui.components.GazaPackageSelectorRow
+import com.example.ui.components.ModernAiThinkingCard
 import com.example.ui.components.SampleOutputPill
 import com.example.ui.state.AiLabMode
 import com.example.ui.state.AiLabOutputState
@@ -84,16 +93,24 @@ fun AiLabScreen(
     decks: List<StudyDeckEntity>,
     selectedStage: GazaStage,
     selectedSubject: String,
+    speedMode: AiSpeedMode,
+    voiceState: VoicePlaybackState,
+    elapsedSeconds: Int,
     onSelectStage: (GazaStage) -> Unit,
     onSelectSubject: (String) -> Unit,
+    onSelectSpeedMode: (AiSpeedMode) -> Unit,
     onSelectMode: (AiLabMode) -> Unit,
     onRunAiLab: (inputNotes: String, imageUri: String?) -> Unit,
+    onCancelLabRequest: () -> Unit,
+    onToggleSpeak: (itemId: String, text: String) -> Unit,
     onSelectQuizOption: (Int) -> Unit,
     onAdvanceQuiz: () -> Unit,
     onResetOutput: () -> Unit,
     onSaveSummaryToDeck: (deckId: Long, summary: AiSummaryResult) -> Unit,
+    onSaveSummaryToCloud: (summary: AiSummaryResult) -> Unit,
     onSaveFlashcardsToDeck: (deckId: Long, cards: List<GeneratedFlashcard>) -> Unit,
     onCopiedNotice: (String) -> Unit,
+    onOpenSchedule: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var notesInput by remember { mutableStateOf("") }
@@ -104,9 +121,10 @@ fun AiLabScreen(
 
     val sampleTopics = remember(selectedSubject) {
         listOf(
+            "أسئلة توجيهي وزاري سابق — $selectedSubject",
             "الرزمة الأولى في $selectedSubject",
             "أهم القوانين والمفاهيم في $selectedSubject",
-            "مراجعة ليلة الامتحان — $selectedSubject"
+            "نموذج امتحان شامل — $selectedSubject"
         )
     }
 
@@ -147,7 +165,8 @@ fun AiLabScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .widthIn(max = 680.dp),
+                .widthIn(max = 680.dp)
+                .testTag("ai_lab_list"),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -179,6 +198,51 @@ fun AiLabScreen(
                     selectedSubject = selectedSubject,
                     onSelectStage = onSelectStage,
                     onSelectSubject = onSelectSubject
+                )
+            }
+
+            item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "مقترح ذكي: جدول دراسة حسب موادك",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "وزّع مواد ${selectedStage.badge} على الأسبوع بضغطة زر.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(
+                            onClick = onOpenSchedule,
+                            modifier = Modifier.testTag("lab_open_schedule_button")
+                        ) {
+                            Icon(Icons.Filled.CalendarMonth, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("الجدول")
+                        }
+                    }
+                }
+            }
+
+            item {
+                AiSpeedModeRow(
+                    speedMode = speedMode,
+                    onSelectSpeedMode = onSelectSpeedMode
                 )
             }
 
@@ -215,7 +279,7 @@ fun AiLabScreen(
                         leadingIcon = {
                             Icon(Icons.Filled.Quiz, contentDescription = null, modifier = Modifier.size(16.dp))
                         },
-                        label = { Text("اختبار") },
+                        label = { Text("امتحان توجيهي") },
                         modifier = Modifier
                             .weight(1f)
                             .testTag("lab_mode_quiz")
@@ -328,7 +392,7 @@ fun AiLabScreen(
                                     when (mode) {
                                         AiLabMode.SUMMARY -> "توليد الملخص"
                                         AiLabMode.FLASHCARDS -> "توليد البطاقات"
-                                        AiLabMode.QUIZ -> "بدء الاختبار"
+                                        AiLabMode.QUIZ -> "توليد امتحان توجيهي سابق"
                                     }
                                 )
                             }
@@ -347,7 +411,7 @@ fun AiLabScreen(
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                         ) {
                             Text(
-                                text = "اختر مبحثك من رزم غزة أعلاه وأدخل اسم الدرس أو صورة من الرزمة ليقوم Gemini بإنشاء ملخص أو بطاقات أو اختبار مخصص.",
+                                text = "اختر مبحثك من رزم غزة أعلاه وأدخل اسم الدرس أو صورة من الرزمة ليقوم Gemini بإنشاء ملخص أو بطاقات أو اختبار بنمط امتحانات التوجيهي القديمة.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center,
@@ -359,23 +423,29 @@ fun AiLabScreen(
 
                 AiLabOutputState.Loading -> {
                     item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(32.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                CircularProgressIndicator()
-                                Text(
-                                    text = "جارٍ التوليد عبر Gemini لرزمة $selectedSubject...",
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            }
+                        val phases = when (mode) {
+                            AiLabMode.SUMMARY -> listOf(
+                                "نبراس يستخلص أهم أفكار $selectedSubject...",
+                                "ينظّم النقاط والقوانين المفتاحية...",
+                                "يضيف تنبيهاً امتحانياً وفق رزم غزة..."
+                            )
+                            AiLabMode.FLASHCARDS -> listOf(
+                                "يصمّم بطاقات استرجاع نشط لمبحث $selectedSubject...",
+                                "يضبط الأسئلة والإجابات القصيرة الدقيقة..."
+                            )
+                            AiLabMode.QUIZ -> listOf(
+                                "يستحضر نماذج امتحانات التوجيهي الوزارية القديمة في $selectedSubject...",
+                                "يصوغ الأسئلة والمشتتات بأسلوب الدورات السابقة...",
+                                "يُعد التعليل الوزاري المعتمد لكل سؤال..."
+                            )
                         }
+                        ModernAiThinkingCard(
+                            subjectTitle = selectedSubject,
+                            elapsedSeconds = elapsedSeconds,
+                            phases = phases,
+                            cancelButtonTag = "lab_cancel_button",
+                            onCancel = onCancelLabRequest
+                        )
                     }
                 }
 
@@ -398,9 +468,20 @@ fun AiLabScreen(
 
                 is AiLabOutputState.SummaryReady -> {
                     item {
+                        val summarySpeakText = buildString {
+                            appendLine(outputState.summary.title)
+                            appendLine(outputState.summary.overview)
+                            outputState.summary.bulletPoints.forEach { appendLine(it) }
+                            if (outputState.summary.examTip.isNotBlank()) {
+                                appendLine("تنبيه امتحاني: ${outputState.summary.examTip}")
+                            }
+                        }
                         SummaryResultCard(
                             summary = outputState.summary,
+                            isSpeakingThis = voiceState.isSpeaking && voiceState.speakingItemId == "lab_summary",
+                            onToggleSpeak = { onToggleSpeak("lab_summary", summarySpeakText) },
                             onSaveClick = { showSaveSummaryDialog = true },
+                            onSaveToCloudClick = { onSaveSummaryToCloud(outputState.summary) },
                             onCopyClick = {
                                 val text = buildString {
                                     appendLine(outputState.summary.title)
@@ -420,6 +501,8 @@ fun AiLabScreen(
                     item {
                         GeneratedFlashcardsSection(
                             cards = outputState.cards,
+                            voiceState = voiceState,
+                            onToggleSpeak = onToggleSpeak,
                             onSaveAllClick = { showSaveCardsDialog = true }
                         )
                     }
@@ -429,6 +512,8 @@ fun AiLabScreen(
                     item {
                         QuizRunnerCard(
                             state = outputState,
+                            voiceState = voiceState,
+                            onToggleSpeak = onToggleSpeak,
                             onSelectOption = onSelectQuizOption,
                             onAdvance = onAdvanceQuiz,
                             onReset = onResetOutput
@@ -446,11 +531,16 @@ fun AiLabScreen(
 @Composable
 private fun SummaryResultCard(
     summary: AiSummaryResult,
+    isSpeakingThis: Boolean,
+    onToggleSpeak: () -> Unit,
     onSaveClick: () -> Unit,
+    onSaveToCloudClick: () -> Unit,
     onCopyClick: () -> Unit
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(),
         shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
@@ -470,6 +560,18 @@ private fun SummaryResultCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(
+                        onClick = onToggleSpeak,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("lab_speak_summary_button")
+                    ) {
+                        Icon(
+                            imageVector = if (isSpeakingThis) Icons.Filled.Stop else Icons.AutoMirrored.Filled.VolumeUp,
+                            contentDescription = if (isSpeakingThis) "إيقاف قراءة الملخص" else "استمع للملخص",
+                            tint = if (isSpeakingThis) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                    IconButton(
                         onClick = onCopyClick,
                         modifier = Modifier.minimumInteractiveComponentSize()
                     ) {
@@ -478,16 +580,34 @@ private fun SummaryResultCard(
                             contentDescription = "نسخ الملخص"
                         )
                     }
-                    OutlinedButton(
-                        onClick = onSaveClick,
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .testTag("save_summary_to_deck_button")
-                    ) {
-                        Icon(Icons.Filled.BookmarkAdd, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("حفظ في مادة")
-                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onSaveClick,
+                    modifier = Modifier
+                        .weight(1f)
+                        .minimumInteractiveComponentSize()
+                        .testTag("save_summary_to_deck_button")
+                ) {
+                    Icon(Icons.Filled.BookmarkAdd, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("حفظ في مادة")
+                }
+                Button(
+                    onClick = onSaveToCloudClick,
+                    modifier = Modifier
+                        .weight(1f)
+                        .minimumInteractiveComponentSize()
+                        .testTag("save_summary_to_cloud_button")
+                ) {
+                    Icon(Icons.Filled.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("مزامنة Firestore")
                 }
             }
 
@@ -547,6 +667,8 @@ private fun SummaryResultCard(
 @Composable
 private fun GeneratedFlashcardsSection(
     cards: List<GeneratedFlashcard>,
+    voiceState: VoicePlaybackState,
+    onToggleSpeak: (itemId: String, text: String) -> Unit,
     onSaveAllClick: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -568,7 +690,9 @@ private fun GeneratedFlashcardsSection(
             }
         }
 
-        cards.forEach { card ->
+        cards.forEachIndexed { idx, card ->
+            val cardSpeakId = "lab_card_$idx"
+            val isSpeaking = voiceState.isSpeaking && voiceState.speakingItemId == cardSpeakId
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = MaterialTheme.shapes.medium,
@@ -579,11 +703,28 @@ private fun GeneratedFlashcardsSection(
                     modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text(
-                        text = card.question,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = card.question,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(
+                            onClick = { onToggleSpeak(cardSpeakId, "${card.question}. الإجابة: ${card.answer}") },
+                            modifier = Modifier.minimumInteractiveComponentSize()
+                        ) {
+                            Icon(
+                                imageVector = if (isSpeaking) Icons.Filled.Stop else Icons.AutoMirrored.Filled.VolumeUp,
+                                contentDescription = if (isSpeaking) "إيقاف القراءة" else "استمع للبطاقة",
+                                tint = if (isSpeaking) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary
+                            )
+                        }
+                    }
                     Text(
                         text = card.answer,
                         style = MaterialTheme.typography.bodyMedium,
@@ -598,6 +739,8 @@ private fun GeneratedFlashcardsSection(
 @Composable
 private fun QuizRunnerCard(
     state: AiLabOutputState.QuizReady,
+    voiceState: VoicePlaybackState,
+    onToggleSpeak: (itemId: String, text: String) -> Unit,
     onSelectOption: (Int) -> Unit,
     onAdvance: () -> Unit,
     onReset: () -> Unit
@@ -641,6 +784,8 @@ private fun QuizRunnerCard(
             }
         } else {
             val currentQ = state.questions[state.currentIndex]
+            val quizSpeakId = "lab_quiz_${state.currentIndex}"
+            val isSpeakingQuiz = voiceState.isSpeaking && voiceState.speakingItemId == quizSpeakId
             Column(
                 modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -655,7 +800,28 @@ private fun QuizRunnerCard(
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.primary
                     )
-                    SampleOutputPill(label = "اختبار رزم غزة")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = {
+                                val textToRead = if (state.selectedOptionIndex != null) {
+                                    "${currentQ.question}. التوضيح: ${currentQ.explanation}"
+                                } else {
+                                    currentQ.question
+                                }
+                                onToggleSpeak(quizSpeakId, textToRead)
+                            },
+                            modifier = Modifier.minimumInteractiveComponentSize()
+                        ) {
+                            Icon(
+                                imageVector = if (isSpeakingQuiz) Icons.Filled.Stop else Icons.AutoMirrored.Filled.VolumeUp,
+                                contentDescription = if (isSpeakingQuiz) "إيقاف القراءة" else "قراءة السؤال",
+                                tint = if (isSpeakingQuiz) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary
+                            )
+                        }
+                        SampleOutputPill(
+                            label = currentQ.examReference.ifBlank { "نمط توجيهي وزاري سابق" }
+                        )
+                    }
                 }
 
                 LinearProgressIndicator(

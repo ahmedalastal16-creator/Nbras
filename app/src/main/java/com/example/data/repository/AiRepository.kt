@@ -2,6 +2,11 @@ package com.example.data.repository
 
 import kotlinx.coroutines.flow.Flow
 
+enum class AiSpeedMode {
+    FAST,
+    DETAILED
+}
+
 data class AiSummaryResult(
     val title: String,
     val overview: String,
@@ -23,6 +28,7 @@ data class QuizQuestion(
     val options: List<String>,
     val correctIndex: Int,
     val explanation: String,
+    val examReference: String = "",
     val isSampleResponse: Boolean = false
 )
 
@@ -31,27 +37,32 @@ interface AiRepository {
         prompt: String,
         stageTitle: String,
         subjectTitle: String,
-        imageUri: String?
+        imageUri: String?,
+        speedMode: AiSpeedMode = AiSpeedMode.FAST,
+        recentHistory: List<Pair<Boolean, String>> = emptyList()
     ): Flow<String>
 
     suspend fun generateSummary(
         topicOrNotes: String,
         stageTitle: String,
         subjectTitle: String,
-        imageUri: String?
+        imageUri: String?,
+        speedMode: AiSpeedMode = AiSpeedMode.FAST
     ): AiSummaryResult
 
     suspend fun generateFlashcards(
         topicOrNotes: String,
         stageTitle: String,
         subjectTitle: String,
-        count: Int = 4
+        count: Int = 4,
+        speedMode: AiSpeedMode = AiSpeedMode.FAST
     ): List<GeneratedFlashcard>
 
     suspend fun generateQuiz(
         topicOrNotes: String,
         stageTitle: String,
         subjectTitle: String,
-        count: Int = 4
+        count: Int = 4,
+        speedMode: AiSpeedMode = AiSpeedMode.FAST
     ): List<QuizQuestion>
 }

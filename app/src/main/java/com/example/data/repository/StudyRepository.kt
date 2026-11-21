@@ -1,5 +1,9 @@
 package com.example.data.repository
 
+import com.example.data.curriculum.GazaCurriculumCatalog
+import com.example.data.curriculum.PreferredStudyPeriod
+import com.example.data.curriculum.ScheduleGenerator
+import com.example.data.curriculum.StudyIntensity
 import com.example.data.local.ChatMessageEntity
 import com.example.data.local.FlashcardEntity
 import com.example.data.local.FocusSessionEntity
@@ -7,6 +11,7 @@ import com.example.data.local.QuizAttemptEntity
 import com.example.data.local.StudyDao
 import com.example.data.local.StudyDeckEntity
 import com.example.data.local.StudyNoteEntity
+import com.example.data.local.StudyScheduleEntity
 import kotlinx.coroutines.flow.Flow
 
 class StudyRepository(private val dao: StudyDao) {
@@ -14,11 +19,22 @@ class StudyRepository(private val dao: StudyDao) {
     val decks: Flow<List<StudyDeckEntity>> = dao.observeDecks()
     val allFlashcards: Flow<List<FlashcardEntity>> = dao.observeAllFlashcards()
     val allNotes: Flow<List<StudyNoteEntity>> = dao.observeAllNotes()
-    val chatMessages: Flow<List<ChatMessageEntity>> = dao.observeChatMessages()
+    fun observeChatMessages(packageId: String): Flow<List<ChatMessageEntity>> = dao.observeChatMessages(packageId)
     val focusSessions: Flow<List<FocusSessionEntity>> = dao.observeFocusSessions()
     val quizAttempts: Flow<List<QuizAttemptEntity>> = dao.observeQuizAttempts()
+    val scheduleItems: Flow<List<StudyScheduleEntity>> = dao.observeScheduleItems()
 
     suspend fun seedStarterContentIfEmpty() {
+        if (dao.getScheduleCount() == 0) {
+            val defaultStage = GazaCurriculumCatalog.stages.first()
+            val initialSchedule = ScheduleGenerator.generateWeeklySchedule(
+                stage = defaultStage,
+                selectedSubjects = defaultStage.subjects.take(4),
+                intensity = StudyIntensity.BALANCED,
+                preferredPeriod = PreferredStudyPeriod.AFTERNOON
+            )
+            dao.insertScheduleItems(initialSchedule)
+        }
         if (dao.getDeckCount() > 0) return
 
         val physicsDeckId = dao.insertDeck(
@@ -167,6 +183,7 @@ class StudyRepository(private val dao: StudyDao) {
     suspend fun deleteNote(noteId: Long) = dao.deleteNoteById(noteId)
 
     suspend fun saveChatMessage(
+        packageId: String,
         isUser: Boolean,
         text: String,
         imageUri: String? = null,
@@ -174,6 +191,7 @@ class StudyRepository(private val dao: StudyDao) {
     ) {
         dao.insertChatMessage(
             ChatMessageEntity(
+                packageId = packageId,
                 isUser = isUser,
                 text = text,
                 imageUri = imageUri,
@@ -182,7 +200,7 @@ class StudyRepository(private val dao: StudyDao) {
         )
     }
 
-    suspend fun clearChatHistory() = dao.clearChatHistory()
+    suspend fun clearChatHistory(packageId: String) = dao.clearChatHistory(packageId)
 
     suspend fun recordFocusSession(durationMinutes: Int, subjectTitle: String) {
         dao.insertFocusSession(
@@ -202,4 +220,19 @@ class StudyRepository(private val dao: StudyDao) {
             )
         )
     }
+
+    suspend fun replaceSchedule(items: List<StudyScheduleEntity>) {
+        dao.clearScheduleItems()
+        if (items.isNotEmpty()) {
+            dao.insertScheduleItems(items)
+        }
+    }
+
+    suspend fun addScheduleItem(item: StudyScheduleEntity): Long = dao.insertScheduleItem(item)
+
+    suspend fun toggleScheduleCompleted(item: StudyScheduleEntity, completed: Boolean) {
+        dao.updateScheduleItem(item.copy(isCompleted = completed))
+    }
+
+    suspend fun deleteScheduleItem(itemId: Long) = dao.deleteScheduleItemById(itemId)
 }

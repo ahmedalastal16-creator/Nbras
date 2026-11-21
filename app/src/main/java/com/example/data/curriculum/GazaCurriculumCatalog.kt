@@ -86,4 +86,27 @@ object GazaCurriculumCatalog {
             )
         )
     )
+
+    fun packageConversationId(stageId: String, subjectTitle: String): String {
+        val stage = stages.firstOrNull { it.id == stageId }
+        val idx = stage?.subjects?.indexOf(subjectTitle) ?: -1
+        return if (idx >= 0) {
+            "pkg_${stageId}_$idx"
+        } else {
+            val hash = (subjectTitle.hashCode().toUInt()).toString(16)
+            "pkg_${stageId}_$hash"
+        }
+    }
+
+    fun findPackageById(packageId: String): Pair<GazaStage, String>? {
+        for (stage in stages) {
+            stage.subjects.forEachIndexed { idx, subject ->
+                if ("pkg_${stage.id}_$idx" == packageId) {
+                    return stage to subject
+                }
+            }
+        }
+        return null
+    }
 }
+

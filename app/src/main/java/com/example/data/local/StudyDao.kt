@@ -51,14 +51,14 @@ interface StudyDao {
     @Query("DELETE FROM study_notes WHERE id = :noteId")
     suspend fun deleteNoteById(noteId: Long)
 
-    @Query("SELECT * FROM chat_messages ORDER BY timestamp ASC")
-    fun observeChatMessages(): Flow<List<ChatMessageEntity>>
+    @Query("SELECT * FROM chat_messages WHERE packageId = :packageId ORDER BY timestamp ASC")
+    fun observeChatMessages(packageId: String): Flow<List<ChatMessageEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertChatMessage(message: ChatMessageEntity): Long
 
-    @Query("DELETE FROM chat_messages")
-    suspend fun clearChatHistory()
+    @Query("DELETE FROM chat_messages WHERE packageId = :packageId")
+    suspend fun clearChatHistory(packageId: String)
 
     @Query("SELECT * FROM focus_sessions ORDER BY completedAt DESC")
     fun observeFocusSessions(): Flow<List<FocusSessionEntity>>
@@ -71,4 +71,25 @@ interface StudyDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertQuizAttempt(attempt: QuizAttemptEntity): Long
+
+    @Query("SELECT * FROM study_schedule ORDER BY dayIndex ASC, id ASC")
+    fun observeScheduleItems(): Flow<List<StudyScheduleEntity>>
+
+    @Query("SELECT COUNT(*) FROM study_schedule")
+    suspend fun getScheduleCount(): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertScheduleItem(item: StudyScheduleEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertScheduleItems(items: List<StudyScheduleEntity>)
+
+    @Update
+    suspend fun updateScheduleItem(item: StudyScheduleEntity)
+
+    @Query("DELETE FROM study_schedule WHERE id = :itemId")
+    suspend fun deleteScheduleItemById(itemId: Long)
+
+    @Query("DELETE FROM study_schedule")
+    suspend fun clearScheduleItems()
 }

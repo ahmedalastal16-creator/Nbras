@@ -2,15 +2,29 @@ package com.example.ui.viewmodel
 
 import android.app.Application
 import android.util.Log
+import androidx.credentials.CredentialManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.auth.attemptAutoSignIn
+import com.example.auth.signOutUser
+import com.example.audio.StudyVoicePlayer
+import com.example.audio.VoicePlaybackState
 import com.example.data.curriculum.GazaCurriculumCatalog
 import com.example.data.curriculum.GazaStage
+import com.example.data.curriculum.PreferredStudyPeriod
+import com.example.data.curriculum.ScheduleGenerator
+import com.example.data.curriculum.StudyIntensity
 import com.example.data.local.ChatMessageEntity
 import com.example.data.local.FlashcardEntity
 import com.example.data.local.NibrasDatabase
 import com.example.data.local.StudyNoteEntity
+import com.example.data.local.StudyScheduleEntity
+import com.example.data.remote.CloudStudySummary
+import com.example.data.remote.ConversationSummary
+import com.example.data.remote.FirestoreChatRepository
+import com.example.data.remote.FirestoreSummariesRepository
 import com.example.data.repository.AiRepository
+import com.example.data.repository.AiSpeedMode
 import com.example.data.repository.FirebaseAiRepository
 import com.example.data.repository.GeneratedFlashcard
 import com.example.data.repository.QuizQuestion
@@ -20,7 +34,12 @@ import com.example.ui.state.AiLabOutputState
 import com.example.ui.state.DashboardStats
 import com.example.ui.state.DeckWithStats
 import com.example.ui.state.FocusTimerState
+import com.google.firebase.Firebase
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.auth
+import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
@@ -28,24 +47,178 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 private const val TAG = "NibrasViewModel"
 
+sealed interface PendingAiAction {
+    val previewText: String
+    data class TutorSend(val prompt: String, val imageUri: String?) : PendingAiAction {
+        override val previewText: String get() = prompt
+    }
+    data class LabRun(val notes: String, val imageUri: String?) : PendingAiAction {
+        override val previewText: String get() = notes.ifBlank { "صورة صفحة من الرزمة" }
+    }
+    data class CloudSummarySave(
+        val stage: GazaStage,
+        val subjectTitle: String,
+        val title: String,
+        val content: String,
+        val keyTerms: String,
+        val sourceType: String
+    ) : PendingAiAction {
+        override val previewText: String get() = "حفظ ملخص: $title"
+    }
+}
+
+data class AuthAccountState(
+    val uid: String? = null,
+    val displayName: String? = null,
+    val email: String? = null
+) {
+    val isSignedIn: Boolean get() = !uid.isNullOrBlank()
+}
+
+@OptIn(ExperimentalCoroutinesApi::class)
 class NibrasViewModel(application: Application) : AndroidViewModel(application) {
 
     private val studyRepository: StudyRepository
     private val aiRepository: AiRepository = FirebaseAiRepository(application)
+    private val firestoreChatRepository: FirestoreChatRepository? = try {
+        FirestoreChatRepository(application)
+    } catch (e: Exception) {
+        Log.w(TAG, "FirestoreChatRepository unavailable: ${e.message}")
+        null
+    }
+    private val firestoreSummariesRepository: FirestoreSummariesRepository? = try {
+        FirestoreSummariesRepository(application)
+    } catch (e: Exception) {
+        Log.w(TAG, "FirestoreSummariesRepository unavailable: ${e.message}")
+        null
+    }
+    private val voicePlayer = StudyVoicePlayer(application)
+    private val firebaseAuth: FirebaseAuth? = try {
+        Firebase.auth
+    } catch (e: Exception) {
+        Log.w(TAG, "FirebaseAuth unavailable: ${e.message}")
+        null
+    }
+
+    private val _authState = MutableStateFlow(readCurrentAuthState())
+    val authState: StateFlow<AuthAccountState> = _authState.asStateFlow()
+
+    private val _showSignInScreen = MutableStateFlow(false)
+    val showSignInScreen: StateFlow<Boolean> = _showSignInScreen.asStateFlow()
+
+    private val _pendingAiAction = MutableStateFlow<PendingAiAction?>(null)
+    val pendingAiAction: StateFlow<PendingAiAction?> = _pendingAiAction.asStateFlow()
+
+    private val authStateListener = FirebaseAuth.AuthStateListener { auth ->
+        val user = auth.currentUser
+        _authState.value = AuthAccountState(
+            uid = user?.uid,
+            displayName = user?.displayName,
+            email = user?.email
+        )
+    }
 
     init {
         val db = NibrasDatabase.getInstance(application)
         studyRepository = StudyRepository(db.studyDao())
+        firebaseAuth?.addAuthStateListener(authStateListener)
         viewModelScope.launch {
             studyRepository.seedStarterContentIfEmpty()
         }
+        // Silent auto sign-in for returning Google users; keeps guests free to browse on failure.
+        if (firebaseAuth != null && firebaseAuth.currentUser == null) {
+            try {
+                val cm = CredentialManager.create(application)
+                attemptAutoSignIn(
+                    context = application,
+                    credentialManager = cm,
+                    onAuthSuccess = { syncAuthStateNow() },
+                    onUnauthenticated = {},
+                    scope = viewModelScope
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Auto sign-in skipped: ${e.message}")
+            }
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        firebaseAuth?.removeAuthStateListener(authStateListener)
+        voicePlayer.release()
+    }
+
+    private fun readCurrentAuthState(): AuthAccountState {
+        val user = try {
+            Firebase.auth.currentUser
+        } catch (_: Exception) {
+            null
+        }
+        return AuthAccountState(
+            uid = user?.uid,
+            displayName = user?.displayName,
+            email = user?.email
+        )
+    }
+
+    fun syncAuthStateNow() {
+        _authState.value = readCurrentAuthState()
+    }
+
+    fun openSignInScreen() {
+        _showSignInScreen.value = true
+    }
+
+    fun dismissSignInScreenAsGuest() {
+        _showSignInScreen.value = false
+        _pendingAiAction.value = null
+    }
+
+    fun onGoogleSignInSucceeded() {
+        syncAuthStateNow()
+        _showSignInScreen.value = false
+        val pending = _pendingAiAction.value
+        _pendingAiAction.value = null
+        when (pending) {
+            is PendingAiAction.TutorSend -> sendTutorMessage(pending.prompt, pending.imageUri)
+            is PendingAiAction.LabRun -> runAiLab(pending.notes, pending.imageUri)
+            is PendingAiAction.CloudSummarySave -> saveCloudStudySummary(
+                stage = pending.stage,
+                subjectTitle = pending.subjectTitle,
+                title = pending.title,
+                content = pending.content,
+                keyTerms = pending.keyTerms,
+                sourceType = pending.sourceType
+            )
+            null -> Unit
+        }
+    }
+
+    fun signOut(credentialManager: CredentialManager) {
+        cancelTutorRequest()
+        cancelAiLabRequest()
+        signOutUser(
+            credentialManager = credentialManager,
+            scope = viewModelScope,
+            beforeSignOut = {
+                // Detach authenticated Firestore listeners BEFORE Firebase.auth.signOut().
+                _authState.value = AuthAccountState()
+            },
+            onSignOutComplete = {
+                _statusBannerMessage.value = "تم تسجيل الخروج. يمكنك مواصلة التصفح كضيف."
+            }
+        )
     }
 
     private val _isDarkTheme = MutableStateFlow(true)
@@ -64,15 +237,45 @@ class NibrasViewModel(application: Application) : AndroidViewModel(application) 
     )
     val selectedGazaSubject: StateFlow<String> = _selectedGazaSubject.asStateFlow()
 
+    val activePackageId: StateFlow<String> = combine(
+        _selectedGazaStage,
+        _selectedGazaSubject
+    ) { stage, subject ->
+        GazaCurriculumCatalog.packageConversationId(stage.id, subject)
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000L),
+        initialValue = GazaCurriculumCatalog.packageConversationId(
+            GazaCurriculumCatalog.stages.first().id,
+            GazaCurriculumCatalog.stages.first().subjects.first()
+        )
+    )
+
     fun selectGazaStage(stage: GazaStage) {
         _selectedGazaStage.value = stage
         if (!stage.subjects.contains(_selectedGazaSubject.value)) {
             _selectedGazaSubject.value = stage.subjects.first()
         }
+        _tutorErrorMessage.value = null
     }
 
     fun selectGazaSubject(subject: String) {
         _selectedGazaSubject.value = subject
+        _tutorErrorMessage.value = null
+    }
+
+    fun selectSavedPackageConversation(packageId: String, stageId: String, subjectTitle: String) {
+        val found = GazaCurriculumCatalog.findPackageById(packageId)
+        if (found != null) {
+            _selectedGazaStage.value = found.first
+            _selectedGazaSubject.value = found.second
+        } else {
+            val stage = GazaCurriculumCatalog.stages.firstOrNull { it.id == stageId }
+                ?: GazaCurriculumCatalog.stages.first()
+            _selectedGazaStage.value = stage
+            _selectedGazaSubject.value = subjectTitle
+        }
+        _tutorErrorMessage.value = null
     }
 
     val decksWithStats: StateFlow<List<DeckWithStats>> = combine(
@@ -94,6 +297,36 @@ class NibrasViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
     val allNotes: StateFlow<List<StudyNoteEntity>> = studyRepository.allNotes
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+
+    val scheduleItems: StateFlow<List<StudyScheduleEntity>> = studyRepository.scheduleItems
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+
+    private val _cloudSummaryError = MutableStateFlow<String?>(null)
+    val cloudSummaryError: StateFlow<String?> = _cloudSummaryError.asStateFlow()
+
+    private val _isSavingCloudSummary = MutableStateFlow(false)
+    val isSavingCloudSummary: StateFlow<Boolean> = _isSavingCloudSummary.asStateFlow()
+
+    val cloudSummaries: StateFlow<List<CloudStudySummary>> = _authState
+        .map { it.uid }
+        .flatMapLatest { uid ->
+            val remoteRepo = firestoreSummariesRepository
+            if (uid.isNullOrBlank() || remoteRepo == null) {
+                flowOf(emptyList())
+            } else {
+                remoteRepo.observeSummaries(uid)
+                    .catch { error ->
+                        val firestoreError = generateSequence(error) { it.cause }
+                            .filterIsInstance<FirebaseFirestoreException>()
+                            .firstOrNull()
+                        if (firestoreError == null && error is CancellationException) throw error
+                        Log.w(TAG, "Unable to observe cloud summaries", firestoreError ?: error)
+                        _cloudSummaryError.value = "تعذر مزامنة بعض الملخصات السحابية مؤقتاً."
+                        emit(emptyList())
+                    }
+            }
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
     val dashboardStats: StateFlow<DashboardStats> = combine(
@@ -121,8 +354,63 @@ class NibrasViewModel(application: Application) : AndroidViewModel(application) 
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), DashboardStats())
 
-    val chatMessages: StateFlow<List<ChatMessageEntity>> = studyRepository.chatMessages
+    // --- Saved Package Conversations List (Authenticated users only; never queries Firestore when guest) ---
+    val savedConversations: StateFlow<List<ConversationSummary>> = _authState
+        .map { it.uid }
+        .flatMapLatest { uid ->
+            val remoteRepo = firestoreChatRepository
+            if (uid.isNullOrBlank() || remoteRepo == null) {
+                flowOf(emptyList())
+            } else {
+                remoteRepo.observeSavedConversations(uid)
+                    .catch { error ->
+                        val firestoreError = generateSequence(error) { it.cause }
+                            .filterIsInstance<FirebaseFirestoreException>()
+                            .firstOrNull()
+                        if (firestoreError == null && error is CancellationException) throw error
+                        Log.w(TAG, "Unable to observe saved conversations", firestoreError ?: error)
+                        emit(emptyList())
+                    }
+            }
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+
+    // --- Isolated Per-Package Chat Messages ---
+    val chatMessages: StateFlow<List<ChatMessageEntity>> = combine(
+        _authState.map { it.uid },
+        activePackageId
+    ) { uid, packageId ->
+        uid to packageId
+    }.flatMapLatest { (uid, packageId) ->
+        val remoteRepo = firestoreChatRepository
+        if (!uid.isNullOrBlank() && remoteRepo != null) {
+            remoteRepo.observeMessages(uid, packageId)
+                .map { remoteMessages ->
+                    remoteMessages.mapIndexed { idx, msg ->
+                        ChatMessageEntity(
+                            id = msg.id.hashCode().toLong() + idx + 1L,
+                            packageId = packageId,
+                            isUser = msg.role == "user",
+                            text = msg.text,
+                            imageUri = msg.imageUri,
+                            isSampleAiOutput = false,
+                            timestamp = msg.createdAt?.toDate()?.time ?: (idx + 1L)
+                        )
+                    }
+                }
+                .catch { error ->
+                    val firestoreError = generateSequence(error) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (firestoreError == null && error is CancellationException) throw error
+                    Log.w(TAG, "Remote chat stream failed, falling back to local cache", firestoreError ?: error)
+                    emit(emptyList())
+                }
+        } else {
+            // Guest browsing uses strictly local Room storage; no unauthenticated Firestore queries.
+            studyRepository.observeChatMessages(packageId)
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
     private val _isTutorThinking = MutableStateFlow(false)
     val isTutorThinking: StateFlow<Boolean> = _isTutorThinking.asStateFlow()
@@ -132,6 +420,53 @@ class NibrasViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _tutorErrorMessage = MutableStateFlow<String?>(null)
     val tutorErrorMessage: StateFlow<String?> = _tutorErrorMessage.asStateFlow()
+
+    private var lastTutorRequest: Pair<String, String?>? = null
+
+    private val _tutorElapsedSeconds = MutableStateFlow(0)
+    val tutorElapsedSeconds: StateFlow<Int> = _tutorElapsedSeconds.asStateFlow()
+
+    private val _labElapsedSeconds = MutableStateFlow(0)
+    val labElapsedSeconds: StateFlow<Int> = _labElapsedSeconds.asStateFlow()
+
+    private val _aiSpeedMode = MutableStateFlow(AiSpeedMode.FAST)
+    val aiSpeedMode: StateFlow<AiSpeedMode> = _aiSpeedMode.asStateFlow()
+
+    private val _autoSpeakTutor = MutableStateFlow(true)
+    val autoSpeakTutor: StateFlow<Boolean> = _autoSpeakTutor.asStateFlow()
+
+    val voiceState: StateFlow<VoicePlaybackState> = voicePlayer.state
+
+    private var tutorJob: Job? = null
+    private var tutorTickerJob: Job? = null
+    private var labJob: Job? = null
+    private var labTickerJob: Job? = null
+
+    fun setAiSpeedMode(mode: AiSpeedMode) {
+        _aiSpeedMode.value = mode
+    }
+
+    fun toggleAutoSpeakTutor() {
+        val next = !_autoSpeakTutor.value
+        _autoSpeakTutor.value = next
+        _statusBannerMessage.value = if (next) {
+            "تم تفعيل القراءة الصوتية التلقائية للشرح."
+        } else {
+            "تم إيقاف القراءة الصوتية التلقائية."
+        }
+    }
+
+    fun toggleSpeak(itemId: String, text: String) {
+        voicePlayer.toggleSpeak(itemId, text)
+    }
+
+    fun stopSpeaking() {
+        voicePlayer.stop()
+    }
+
+    fun setSpeechRate(rate: Float) {
+        voicePlayer.setSpeechRate(rate)
+    }
 
     fun dismissTutorError() {
         _tutorErrorMessage.value = null
@@ -226,61 +561,145 @@ class NibrasViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    // --- AI Tutor Chat (Streaming Gemini) ---
+    // --- AI Tutor Chat (Auth-gated on Send, Per-Package Persistent Thread) ---
+
+    fun cancelTutorRequest() {
+        tutorJob?.cancel()
+        tutorTickerJob?.cancel()
+        _tutorElapsedSeconds.value = 0
+        _streamingTutorText.value = null
+        _isTutorThinking.value = false
+    }
+
+    fun retryLastTutorMessage() {
+        val last = lastTutorRequest ?: return
+        _tutorErrorMessage.value = null
+        sendTutorMessage(last.first, last.second)
+    }
 
     fun sendTutorMessage(prompt: String, attachedImageUri: String?) {
         val trimmed = prompt.trim()
         if (trimmed.isEmpty() && attachedImageUri == null) return
         if (_isTutorThinking.value) return
 
-        val stageTitle = _selectedGazaStage.value.title
+        val stage = _selectedGazaStage.value
         val subjectTitle = _selectedGazaSubject.value
         val effectivePrompt = trimmed.ifEmpty { "اشرح لي هذه الصفحة من رزمة $subjectTitle المرفقة" }
+        lastTutorRequest = effectivePrompt to attachedImageUri
 
-        viewModelScope.launch {
+        // Gate sending AI messages behind Google Sign-In while keeping guest browsing open.
+        val uid = readCurrentAuthState().uid
+        if (uid.isNullOrBlank()) {
+            _pendingAiAction.value = PendingAiAction.TutorSend(effectivePrompt, attachedImageUri)
+            _showSignInScreen.value = true
+            return
+        }
+
+        val packageId = GazaCurriculumCatalog.packageConversationId(stage.id, subjectTitle)
+        val speedMode = _aiSpeedMode.value
+        val historySnapshot = chatMessages.value.takeLast(6).map { it.isUser to it.text }
+
+        tutorJob?.cancel()
+        tutorTickerJob?.cancel()
+        _tutorElapsedSeconds.value = 0
+
+        tutorTickerJob = viewModelScope.launch {
+            while (true) {
+                delay(1_000L)
+                _tutorElapsedSeconds.update { it + 1 }
+            }
+        }
+
+        tutorJob = viewModelScope.launch {
             _isTutorThinking.value = true
             _tutorErrorMessage.value = null
             _streamingTutorText.value = null
             try {
-                studyRepository.saveChatMessage(
+                persistPackageMessage(
+                    packageId = packageId,
+                    stage = stage,
+                    subjectTitle = subjectTitle,
                     isUser = true,
                     text = effectivePrompt,
-                    imageUri = attachedImageUri,
-                    isSampleAiOutput = false
+                    imageUri = attachedImageUri
                 )
 
                 var finalReply = ""
                 aiRepository.askTutorStream(
                     prompt = effectivePrompt,
-                    stageTitle = stageTitle,
+                    stageTitle = stage.title,
                     subjectTitle = subjectTitle,
-                    imageUri = attachedImageUri
+                    imageUri = attachedImageUri,
+                    speedMode = speedMode,
+                    recentHistory = historySnapshot
                 ).collect { accumulated ->
                     finalReply = accumulated
                     _streamingTutorText.value = accumulated
                 }
 
                 if (finalReply.isNotBlank()) {
-                    studyRepository.saveChatMessage(
+                    lastTutorRequest = null
+                    persistPackageMessage(
+                        packageId = packageId,
+                        stage = stage,
+                        subjectTitle = subjectTitle,
                         isUser = false,
                         text = finalReply,
-                        imageUri = null,
-                        isSampleAiOutput = false
+                        imageUri = null
                     )
+                    if (_autoSpeakTutor.value) {
+                        voicePlayer.speak("tutor_auto", finalReply)
+                    }
                 } else {
                     _tutorErrorMessage.value = "لم يُرجع الذكاء الاصطناعي نصاً. حاول صياغة السؤال مجدداً."
                 }
             } catch (e: TimeoutCancellationException) {
                 Log.e(TAG, "Tutor streaming timed out", e)
-                _tutorErrorMessage.value = "انتهت مهلة الاتصال (60 ثانية). تحقق من الإنترنت وحاول مجدداً."
+                _tutorErrorMessage.value = "انتهت مهلة الاتصال (60 ثانية). تحقق من الإنترنت وجرّب مرة أخرى."
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Firebase AI tutor failed", e)
-                _tutorErrorMessage.value = e.localizedMessage ?: "تعذر الاتصال بـ Gemini AI."
+                _tutorErrorMessage.value = FirebaseAiRepository.formatErrorMessage(e)
             } finally {
+                tutorTickerJob?.cancel()
+                _tutorElapsedSeconds.value = 0
                 _streamingTutorText.value = null
                 _isTutorThinking.value = false
+            }
+        }
+    }
+
+    private suspend fun persistPackageMessage(
+        packageId: String,
+        stage: GazaStage,
+        subjectTitle: String,
+        isUser: Boolean,
+        text: String,
+        imageUri: String?
+    ) {
+        // Persist locally immediately so Room is up-to-date without waiting on Firestore network RTT.
+        studyRepository.saveChatMessage(
+            packageId = packageId,
+            isUser = isUser,
+            text = text,
+            imageUri = imageUri,
+            isSampleAiOutput = false
+        )
+        val remote = firestoreChatRepository
+        if (!readCurrentAuthState().uid.isNullOrBlank() && remote != null) {
+            viewModelScope.launch {
+                val result = remote.saveMessage(
+                    conversationId = packageId,
+                    stage = stage,
+                    subjectTitle = subjectTitle,
+                    role = if (isUser) "user" else "model",
+                    text = text,
+                    imageUri = imageUri
+                )
+                if (result.isFailure) {
+                    Log.w(TAG, "Cloud save failed, keeping local Room backup")
+                }
             }
         }
     }
@@ -304,15 +723,28 @@ class NibrasViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun clearChatHistory() {
+        val packageId = activePackageId.value
+        val uid = readCurrentAuthState().uid
         viewModelScope.launch {
-            studyRepository.clearChatHistory()
+            if (!uid.isNullOrBlank()) {
+                firestoreChatRepository?.clearConversation(packageId)
+            }
+            studyRepository.clearChatHistory(packageId)
+            _statusBannerMessage.value = "تم مسح محادثة رزمة ${_selectedGazaSubject.value} فقط."
         }
     }
 
-    // --- AI Lab (Summary, Flashcards, Quiz via Gemini Structured JSON) ---
+    // --- AI Lab (Auth-gated on Generate) ---
 
     fun setAiLabMode(mode: AiLabMode) {
         _aiLabMode.value = mode
+        _aiLabOutput.value = AiLabOutputState.Idle
+    }
+
+    fun cancelAiLabRequest() {
+        labJob?.cancel()
+        labTickerJob?.cancel()
+        _labElapsedSeconds.value = 0
         _aiLabOutput.value = AiLabOutputState.Idle
     }
 
@@ -326,10 +758,28 @@ class NibrasViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
+        val uid = readCurrentAuthState().uid
+        if (uid.isNullOrBlank()) {
+            _pendingAiAction.value = PendingAiAction.LabRun(topic, attachedImageUri)
+            _showSignInScreen.value = true
+            return
+        }
+
         val stageTitle = _selectedGazaStage.value.title
         val subjectTitle = _selectedGazaSubject.value
+        val speedMode = _aiSpeedMode.value
 
-        viewModelScope.launch {
+        labJob?.cancel()
+        labTickerJob?.cancel()
+        _labElapsedSeconds.value = 0
+        labTickerJob = viewModelScope.launch {
+            while (true) {
+                delay(1_000L)
+                _labElapsedSeconds.update { it + 1 }
+            }
+        }
+
+        labJob = viewModelScope.launch {
             _aiLabOutput.value = AiLabOutputState.Loading
             try {
                 when (mode) {
@@ -338,7 +788,8 @@ class NibrasViewModel(application: Application) : AndroidViewModel(application) 
                             topicOrNotes = topic,
                             stageTitle = stageTitle,
                             subjectTitle = subjectTitle,
-                            imageUri = attachedImageUri
+                            imageUri = attachedImageUri,
+                            speedMode = speedMode
                         )
                         _aiLabOutput.value = AiLabOutputState.SummaryReady(result)
                     }
@@ -347,31 +798,36 @@ class NibrasViewModel(application: Application) : AndroidViewModel(application) 
                             topicOrNotes = topic.ifBlank { "المفاهيم الرئيسية في رزمة $subjectTitle" },
                             stageTitle = stageTitle,
                             subjectTitle = subjectTitle,
-                            count = 4
+                            count = 4,
+                            speedMode = speedMode
                         )
                         _aiLabOutput.value = AiLabOutputState.FlashcardsReady(cards)
                     }
                     AiLabMode.QUIZ -> {
                         val questions = aiRepository.generateQuiz(
-                            topicOrNotes = topic.ifBlank { "مراجعة رزمة $subjectTitle" },
+                            topicOrNotes = topic.ifBlank { "امتحان توجيهي وزاري سابق شامل في رزمة $subjectTitle" },
                             stageTitle = stageTitle,
                             subjectTitle = subjectTitle,
-                            count = 4
+                            count = 5,
+                            speedMode = speedMode
                         )
                         _aiLabOutput.value = AiLabOutputState.QuizReady(
-                            title = topic.ifBlank { subjectTitle }.take(32),
+                            title = topic.ifBlank { "توجيهي سابق • $subjectTitle" }.take(36),
                             questions = questions
                         )
                     }
                 }
             } catch (e: TimeoutCancellationException) {
                 Log.e(TAG, "AI Lab timed out", e)
-                _aiLabOutput.value = AiLabOutputState.Error("انتهت مهلة المعالجة بعد 60 ثانية. يرجى المحاولة مرة أخرى.")
+                _aiLabOutput.value = AiLabOutputState.Error("انتهت مهلة المعالجة بعد 60 ثانية. حاول مرة أخرى.")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "AI Lab generation failed", e)
-                _aiLabOutput.value = AiLabOutputState.Error(e.localizedMessage ?: "تعذر التوليد عبر Gemini AI.")
+                _aiLabOutput.value = AiLabOutputState.Error(FirebaseAiRepository.formatErrorMessage(e))
+            } finally {
+                labTickerJob?.cancel()
+                _labElapsedSeconds.value = 0
             }
         }
     }
@@ -390,6 +846,7 @@ class NibrasViewModel(application: Application) : AndroidViewModel(application) 
                 options = allOptions,
                 correctIndex = correctIdx,
                 explanation = card.hint.ifBlank { card.answer },
+                examReference = "اختبار مراجعة المادة",
                 isSampleResponse = false
             )
         }
@@ -457,7 +914,100 @@ class NibrasViewModel(application: Application) : AndroidViewModel(application) 
                 keyTerms = keyTerms.joinToString(" • "),
                 isSampleAiOutput = isSample
             )
-            _statusBannerMessage.value = "تم حفظ الملخص في المادة المختارة."
+            val uid = readCurrentAuthState().uid
+            if (!uid.isNullOrBlank()) {
+                firestoreSummariesRepository?.saveSummary(
+                    stage = _selectedGazaStage.value,
+                    subjectTitle = _selectedGazaSubject.value,
+                    title = title,
+                    content = content,
+                    keyTerms = keyTerms.joinToString(" • "),
+                    sourceType = "ai_lab"
+                )
+            }
+            _statusBannerMessage.value = if (!uid.isNullOrBlank()) {
+                "تم حفظ الملخص محلياً ومزامنته مع Firestore."
+            } else {
+                "تم حفظ الملخص في المادة المختارة."
+            }
+        }
+    }
+
+    fun clearCloudSummaryError() {
+        _cloudSummaryError.value = null
+    }
+
+    fun saveCloudStudySummary(
+        stage: GazaStage,
+        subjectTitle: String,
+        title: String,
+        content: String,
+        keyTerms: String,
+        sourceType: String = "manual",
+        existingId: String? = null
+    ) {
+        val cleanTitle = title.trim()
+        val cleanContent = content.trim()
+        if (cleanTitle.isEmpty() || cleanContent.isEmpty()) {
+            _statusBannerMessage.value = "أدخل عنواناً ومحتوىً للملخص قبل الحفظ."
+            return
+        }
+
+        val uid = readCurrentAuthState().uid
+        if (uid.isNullOrBlank()) {
+            _pendingAiAction.value = PendingAiAction.CloudSummarySave(
+                stage = stage,
+                subjectTitle = subjectTitle,
+                title = cleanTitle,
+                content = cleanContent,
+                keyTerms = keyTerms.trim(),
+                sourceType = sourceType
+            )
+            _showSignInScreen.value = true
+            return
+        }
+
+        val repo = firestoreSummariesRepository
+        if (repo == null) {
+            _cloudSummaryError.value = "خدمة Firestore غير متاحة حالياً."
+            return
+        }
+
+        viewModelScope.launch {
+            _isSavingCloudSummary.value = true
+            _cloudSummaryError.value = null
+            val result = repo.saveSummary(
+                stage = stage,
+                subjectTitle = subjectTitle,
+                title = cleanTitle,
+                content = cleanContent,
+                keyTerms = keyTerms,
+                sourceType = sourceType,
+                existingId = existingId
+            )
+            _isSavingCloudSummary.value = false
+            if (result.isSuccess) {
+                _statusBannerMessage.value = if (existingId != null) {
+                    "تم تحديث الملخص ومزامنته مع Firestore."
+                } else {
+                    "تم حفظ الملخص ومزامنته في السحابة."
+                }
+            } else {
+                _cloudSummaryError.value = result.exceptionOrNull()?.localizedMessage
+                    ?: "تعذر حفظ الملخص في Firestore. تحقق من اتصالك."
+            }
+        }
+    }
+
+    fun deleteCloudStudySummary(summaryId: String) {
+        val repo = firestoreSummariesRepository ?: return
+        viewModelScope.launch {
+            val result = repo.deleteSummary(summaryId)
+            if (result.isSuccess) {
+                _statusBannerMessage.value = "تم حذف الملخص السحابي."
+            } else {
+                _cloudSummaryError.value = "تعذر حذف الملخص من Firestore."
+            }
         }
     }
 
@@ -527,6 +1077,92 @@ class NibrasViewModel(application: Application) : AndroidViewModel(application) 
     fun deleteNote(noteId: Long) {
         viewModelScope.launch {
             studyRepository.deleteNote(noteId)
+        }
+    }
+
+    // --- Study Schedule (جدول الدراسة حسب المواد) ---
+
+    fun generateSmartSchedule(
+        selectedSubjects: List<String>,
+        intensity: StudyIntensity,
+        period: PreferredStudyPeriod
+    ) {
+        val stage = _selectedGazaStage.value
+        val items = ScheduleGenerator.generateWeeklySchedule(
+            stage = stage,
+            selectedSubjects = selectedSubjects,
+            intensity = intensity,
+            preferredPeriod = period
+        )
+        viewModelScope.launch {
+            studyRepository.replaceSchedule(items)
+            _statusBannerMessage.value = "تم إنشاء جدول دراسة أسبوعي (${items.size} حصص) لمرحلة ${stage.badge}."
+        }
+    }
+
+    fun addCustomScheduleItem(
+        dayIndex: Int,
+        subjectTitle: String,
+        topic: String,
+        timeSlot: String,
+        durationMinutes: Int,
+        focusType: String
+    ) {
+        val stage = _selectedGazaStage.value
+        val safeDay = dayIndex.coerceIn(0, ScheduleGenerator.weekDays.lastIndex)
+        viewModelScope.launch {
+            studyRepository.addScheduleItem(
+                StudyScheduleEntity(
+                    stageId = stage.id,
+                    dayIndex = safeDay,
+                    dayLabel = ScheduleGenerator.weekDays[safeDay],
+                    subjectTitle = subjectTitle.trim(),
+                    topic = topic.trim(),
+                    timeSlot = timeSlot.trim(),
+                    durationMinutes = durationMinutes.coerceIn(10, 240),
+                    focusType = focusType,
+                    accentHex = 0xFF5EEAD4L,
+                    isCompleted = false
+                )
+            )
+            _statusBannerMessage.value = "تمت إضافة حصة «$subjectTitle» ليوم ${ScheduleGenerator.weekDays[safeDay]}."
+        }
+    }
+
+    fun toggleScheduleCompleted(item: StudyScheduleEntity, completed: Boolean) {
+        viewModelScope.launch {
+            studyRepository.toggleScheduleCompleted(item, completed)
+        }
+    }
+
+    fun deleteScheduleItem(itemId: Long) {
+        viewModelScope.launch {
+            studyRepository.deleteScheduleItem(itemId)
+        }
+    }
+
+    fun prepareFocusFromSchedule(subjectTitle: String, durationMinutes: Int) {
+        timerJob?.cancel()
+        val safeMinutes = durationMinutes.coerceIn(10, 120)
+        _focusTimer.value = FocusTimerState(
+            selectedMinutes = safeMinutes,
+            remainingSeconds = safeMinutes * 60,
+            isRunning = false,
+            activeSubject = subjectTitle
+        )
+        _statusBannerMessage.value = "تم تجهيز مؤقت التركيز لمادة «$subjectTitle» ($safeMinutes دقيقة)."
+    }
+
+    fun preparePackageForSubject(subjectTitle: String) {
+        val matchedStage = GazaCurriculumCatalog.stages.firstOrNull { stage ->
+            stage.subjects.any { it == subjectTitle || subjectTitle.startsWith(it) }
+        }
+        if (matchedStage != null) {
+            _selectedGazaStage.value = matchedStage
+            val exact = matchedStage.subjects.firstOrNull { it == subjectTitle || subjectTitle.startsWith(it) }
+            if (exact != null) {
+                _selectedGazaSubject.value = exact
+            }
         }
     }
 }
